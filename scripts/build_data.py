@@ -219,6 +219,8 @@ def recheck(out: Path, data: dict, stations: list[dict]) -> None:
     records the stations TfL marks isAlwaysQuiet."""
     meta = {s["naptan"]: s for s in stations}
     flagged = set(data.get("always_quiet", []))
+    # A station without figures is asked for Monday first, and for the rest
+    # of the week only if Monday turns out to have figures after all.
     todo = [(n, list(DAYS)) for n in sorted(data["no_data"], key=lambda n: data["no_data"][n])]
     todo += [(n, [d for d in DAYS if d not in s["days"]])
              for n, s in sorted(data["stations"].items(), key=lambda item: item[1]["name"])
@@ -232,6 +234,8 @@ def recheck(out: Path, data: dict, stations: list[dict]) -> None:
                 reasons[day] = why_rejected(raw)
                 if always_quiet(raw):
                     flagged.add(naptan)
+                if naptan not in data["stations"] and day == "Mon":
+                    break
                 continue
             values, am_band, pm_band = parsed
             if naptan not in data["stations"]:
@@ -248,7 +252,7 @@ def recheck(out: Path, data: dict, stations: list[dict]) -> None:
             data["no_data"].pop(naptan, None)
             flagged.discard(naptan)
         name = data["stations"].get(naptan, {}).get("name") or data["no_data"].get(naptan, naptan)
-        got = [d for d in days if d not in reasons]
+        got = [d for d in days if d in data["stations"].get(naptan, {}).get("days", {})]
         print(f"  {name}: got {got or 'nothing'}; still missing {reasons or 'nothing'}", flush=True)
         data["always_quiet"] = sorted(flagged & set(data["no_data"]))
         save(out, data)

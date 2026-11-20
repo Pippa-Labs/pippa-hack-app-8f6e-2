@@ -18,7 +18,7 @@ app_author_name: "poppynoteaming"
 app:
   id: hack.app_8f6e_2
   name: Quiet Time
-  version: 0.1.0
+  version: 0.1.1
   summary: >-
     How busy a London tube station is at a time and day versus its usual peak,
     and when it is quietest or busiest. Uses TfL open data shipped with the

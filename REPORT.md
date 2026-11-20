@@ -6,13 +6,16 @@ busiest?* All figures come from TfL's open crowding data (Powered by TfL Open
 Data), downloaded on this Mac by `scripts/build_data.py` into `crowding.json`
 beside `app.py`. The app never makes a network call.
 
-- Repository: `Pippa-Labs/pippa-hack-app-8f6e-2`, app id `hack.app_8f6e_2`, version 0.1.0
+- Repository: `Pippa-Labs/pippa-hack-app-8f6e-2`, app id `hack.app_8f6e_2`, version 0.1.1 (0.1.0 is submitted for review and frozen)
 - Author (pen name): `poppynoteaming`
 - Outcomes: `crowding.at` (how busy at a time) and `crowding.quietest`
   (quietest / busiest / rush hour). Both take `station`, `day`, `time`,
   `window` and return the same shape.
 
-<!-- BUILD-RESULT -->
+**Build result.** 0.1.0 (partial data) published as a private draft:
+`pippa/publish` = success, "Published as a private draft: hack.app_8f6e_2
+v0.1.0", every check OK, the tests passed, routing check clean, no warnings.
+0.1.1 (full data): see the bottom of this file.
 
 ## Five demo questions, with the exact replies
 
@@ -164,9 +167,9 @@ Outcome `crowding.at`, inputs `{"station": "Tottenham Ct Rd", "time": "half five
 
 Outcome `crowding.at`, inputs `{"station": "Heathrow T5", "day": "tomorrow", "time": "7am"}`, asked at Friday 20 November 2026 14:50 London.
 
-Refused (UnknownStation): 
+Refused (NoCrowdingData): 
 
-> I couldn't find a London tube station called "Heathrow T5".
+> TfL has no crowding figures for Heathrow Terminal 5.
 
 ### 4. "How busy is Monument at 9am?"
 
@@ -222,11 +225,33 @@ tomorrow, calendar, schedule, search…) appears in any phrase, and the word
 - Should NOT reach it: "why is the Central line so hot", "is the Elizabeth
   line part of the tube", "change my commute to 9am"
 
-<!-- TESTS -->
+## Tests and checks
+
+- `test_app.py`: 36 test functions (85 collected with parametrisation), all
+  through `LocalRunner` with `now` fixed at Friday 20 November 2026 14:50 UTC,
+  against the bundled `crowding.json`; the network is blocked by
+  `conftest.py`. A synthetic dataset is used only for what the real file
+  cannot produce (a station missing a day, an always-quiet station, an empty
+  dataset). They cover the five demo questions, fuzzy names, every refusal
+  (each one sentence), day / time / window parsing, optional fields, the
+  `source` label, data-file size and shape, `explicit=True`, no network
+  imports in `app.py`, and the runner enforcing the manifest.
+- Result (local, stand-in SDK, full data): `84 passed, 1 skipped (Heathrow T5: TfL publishes no figures for it, so its fuzzy-name test skips)`. The build runs the same suite with the real SDK; see the build result at the top.
+- `scripts/check.py`: every check OK, "Ready to push" (locally against the
+  stand-in, and in the build with the real SDK).
+- `scripts/routing_check.py`: clean, "Nothing here will stop your app being
+  chosen." (locally and in the build).
 
 ## Data
 
-<!-- DATA -->
+- `crowding.json`: 534 KB, downloaded 2026-11-20 from `api.tfl.gov.uk/StopPoint/Mode/tube` and `api.tfl.gov.uk/crowding/<naptan>/<Day>` (never the live endpoint).
+- 272 tube stations (`NaptanMetroStation`); **254 with crowding figures** (253 with all seven days), **18 without**.
+- Stations missing some days: Finsbury Park (no Fri, Sat, Sun, Thu, Wed).
+- Each station keeps TfL's 96 fifteen-minute values per day as integers (percent of TfL's baseline), TfL's am/pm peak bands per day, its zone, lines and coordinates.
+
+**Stations TfL publishes no crowding figures for** (the app answers "TfL has no crowding figures for X."; TfL returns `isFound: false` for them):
+
+Arsenal, Caledonian Road, Canning Town, Colindale, Hammersmith, Hammersmith, Heathrow Terminal 5, Holloway Road, Kensington (Olympia), Ladbroke Grove, Monument, Pimlico, Russell Square, Seven Sisters, South Kenton, St. James's Park, West Acton, Willesden Junction.
 
 ## Assumptions and decisions (made without asking, as instructed)
 
@@ -297,11 +322,15 @@ tomorrow, calendar, schedule, search…) appears in any phrase, and the word
     from Pippa Labs. The README says to accept it, and pushing was part of the
     brief, so I accepted that one invitation (only this repository's) and
     pushed.
-16. **First push carried partial data.** I pushed once the tests were green
-    with Zone 1 and most of Zone 2 downloaded (all five demo stations
-    included), to prove the build early, then pushed again with the full
-    file. Both are the same version, 0.1.0, which is still a draft, so the
-    second push replaced the first.
+16. **Two versions.** 0.1.0 was pushed once the tests were green with Zone 1
+    and most of Zone 2 downloaded (all five demo stations included), to prove
+    the build early; it published as a private draft and has since been
+    submitted for review, so it is frozen. 0.1.1 carries the complete data
+    file and one fix made after 0.1.0: a named day the app cannot read, such
+    as "Christmas Day", is refused instead of becoming the current day.
+    Press **Update to latest**
+    on the app's card (or switch on **Always use my latest version**) to get
+    0.1.1 in chat.
 
 ## Risks
 
@@ -331,3 +360,7 @@ tomorrow, calendar, schedule, search…) appears in any phrase, and the word
   `git config user.name` together, then push.
 - **Assumed the stand-in SDK matches the real one** closely enough; if the
   build's tests disagree, the build is right (see the build result above).
+
+## Build result for 0.1.1
+
+<!-- FINAL-BUILD -->
