@@ -332,7 +332,8 @@ def parse_day(text: str, today: date) -> str | None:
             return DAYS[date(year, parsed.month, parsed.day).weekday()]
         except ValueError:
             return "?"
-    if parse_window(cleaned) is not None:
+    part = parse_window(cleaned)
+    if part is not None and part[0] != "day":
         return None         # "this evening": no day named, only a part of one
     return "?"
 
