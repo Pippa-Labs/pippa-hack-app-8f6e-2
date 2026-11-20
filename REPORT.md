@@ -363,4 +363,9 @@ Arsenal, Caledonian Road, Canning Town, Colindale, Hammersmith, Hammersmith, Hea
 
 ## Build result for 0.1.1
 
-<!-- FINAL-BUILD -->
+Commit `6170ae6`: `pippa/publish` = **success**, "Published as a private
+draft: hack.app_8f6e_2 v0.1.1". The build's check passed, the tests passed
+with the real SDK, the routing check said "Nothing here will stop your app
+being chosen.", no warnings, 8 files packaged (109 KB). To use it in chat:
+Apps → Created by me → **Update to latest** (or **Always use my latest
+version**). 0.1.0 stays frozen in review.
