@@ -55,7 +55,7 @@ QUIET_BELOW, MODERATE_BELOW, BUSY_BELOW = 30, 60, 85
 
 # The window used for "quietest" when the question names neither a window nor
 # a time: the hours people actually travel, not 03:00 when the station is shut.
-DEFAULT_WINDOW = (6 * 60, 23 * 60)
+DEFAULT_WINDOW = (7 * 60, 22 * 60)
 # With a time but no window, "quietest" looks this far either side of it.
 NEAR_TIME = 2 * 60
 
@@ -110,9 +110,10 @@ def load_data(path: Path = DATA_PATH) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {"downloaded": "", "stations": {}, "no_data": {}}
+        return {"downloaded": "", "stations": {}, "no_data": {}, "always_quiet": []}
     data.setdefault("stations", {})
     data.setdefault("no_data", {})
+    data.setdefault("always_quiet", [])
     data.setdefault("downloaded", "")
     return data
 
@@ -205,13 +206,19 @@ class StationIndex:
         self.keys: dict[str, list[str]] = {}   # normalised key -> naptans
         everything = {**{k: v.get("name", k) for k, v in data.get("stations", {}).items()},
                       **{k: v for k, v in data.get("no_data", {}).items() if k not in data.get("stations", {})}}
+        # TfL calls one station "Paddington (H&C Line)-Underground".
+        everything = {k: re.sub(r"\s*-\s*Underground$", "", v).strip() for k, v in everything.items()}
         counts = Counter(everything.values())
+        self.exact: dict[str, list[str]] = {}  # full names only, matched first
         for naptan, name in everything.items():
             display = name
             station = data.get("stations", {}).get(naptan)
             if counts[name] > 1 and station and station.get("lines"):
                 display = f"{name} ({', '.join(station['lines'])})"
             self.names[naptan] = display
+            for key in {normalise(name), normalise(display)}:
+                if key:
+                    self.exact.setdefault(key, []).append(naptan)
             for key in {normalise(name), normalise(re.sub(r"\(.*?\)", " ", name)), normalise(display)}:
                 if key:
                     self.keys.setdefault(key, []).append(naptan)
@@ -232,6 +239,8 @@ class StationIndex:
         query = normalise(text)
         if not query:
             return None, None
+        if query in self.exact:
+            return self._best(self.exact[query]), None
         if query in self.keys:
             return self._best(self.keys[query]), None
         if len(query) >= 3:
@@ -376,6 +385,15 @@ def parse_time(text: str) -> int | str | None:
         hour, minute = int(match.group(1)), int(match.group(2))
         if hour < 24 and minute < 60:
             return hour * 60 + minute
+    # A time inside other words: "5:30pm friday", "about 8am please".
+    match = (re.search(r"\b(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)\b", cleaned)
+             or re.search(r"\b(\d{1,2})[:.](\d{2})\b()", cleaned))
+    if match:
+        hour_s, minute_s, suffix = match.groups()
+        result = _hour_24(int(hour_s), int(minute_s or 0), suffix or "",
+                          hour_s.startswith("0") or int(hour_s) >= 13)
+        if result is not None:
+            return result
     return "?"
 
 
@@ -502,8 +520,10 @@ class App:
         name = self.index.names[naptan]
         station = self.data["stations"].get(naptan)
         if not station or not station.get("days"):
-            raise _fail(NoCrowdingData, f"no figures for {naptan}",
-                        f"TfL has no crowding figures for {name}.")
+            message = f"TfL has no crowding figures for {name}."
+            if naptan in set(self.data.get("always_quiet") or []):
+                message = f"TfL has no crowding figures for {name}, which it lists as always quiet."
+            raise _fail(NoCrowdingData, f"no figures for {naptan}", message)
 
         now = call.context.now.astimezone(LONDON)
         today_key = DAYS[now.weekday()]
@@ -554,18 +574,17 @@ class App:
         quiet_i = self._quietest(pct, span, moment)
         busy_i = max(range(BANDS), key=lambda i: (pct[i], -i))
 
-        data = {
-            "station": name,
-            "day": label,
+        data: dict = {"station": name, "day": label}
+        if isinstance(moment, int):
+            now_pct = pct[(moment // BAND) % BANDS]
+            data.update({"time": hhmm(moment), "busyness_pct": now_pct, "level": level_of(now_pct)})
+        data.update({
             "am_peak": am_band or "not published",
             "pm_peak": pm_band or "not published",
             "quietest_time_in_window": hhmm(quiet_i * BAND),
             "busiest_time": hhmm(busy_i * BAND),
             "source": f"TfL open data, downloaded {self.data.get('downloaded') or 'date unknown'}",
-        }
-        if isinstance(moment, int):
-            now_pct = pct[(moment // BAND) % BANDS]
-            data.update({"time": hhmm(moment), "busyness_pct": now_pct, "level": level_of(now_pct)})
+        })
 
         narrative = self._narrative(call.outcome_id, data, pct, moment, window, window_label,
                                     span, quiet_i, busy_i, am_band, pm_band, label)
@@ -613,7 +632,7 @@ class App:
             if span == "rush":
                 start = (_band(am_band) or (7 * 60, 10 * 60))[0]
                 end = (_band(pm_band) or (16 * 60, 19 * 60))[1]
-                return (start, end), "around the rush hours"
+                return (start, end), "between the peaks"
             start, end = span
             return (start, end), f"between {hhmm(start)} and {hhmm(end) if end < DAY_END else '24:00'}"
         if isinstance(moment, int):

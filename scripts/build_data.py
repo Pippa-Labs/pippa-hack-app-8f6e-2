@@ -19,7 +19,8 @@ What it does:
                      "zone": "1", "lines": ["Bakerloo", ..],
                      "days": {"Mon": [96 ints 0-100+], ..},
                      "am": {"Mon": "07:45-09:45", ..}, "pm": {"Mon": "17:00-19:00", ..}}},
-        "no_data": {"940GZZ...": "Station name"}}
+        "no_data": {"940GZZ...": "Station name"},
+        "always_quiet": ["940GZZ..."]}     # no_data stations TfL marks isAlwaysQuiet
 
 Zone 1 stations are fetched first, 8 at a time, and the file is saved after
 every station, so a run that is stopped part way still leaves a useful file,
@@ -89,7 +90,7 @@ def clean_name(common_name: str) -> str:
     "(Dist&Picc Line)" are removed too; app.py tells same-named stations apart
     by their lines."""
     name = common_name
-    for suffix in (" Underground Station", " (Dist&Picc Line)", " (H&C Line)"):
+    for suffix in (" Underground Station", "-Underground", " (Dist&Picc Line)", " (H&C Line)"):
         if name.endswith(suffix):
             name = name[: -len(suffix)]
     return name.strip()
@@ -162,18 +163,43 @@ def parse_day(raw: bytes | None) -> tuple[list[int], str, str] | None:
     return values, body.get("amPeakTimeBand") or "", body.get("pmPeakTimeBand") or ""
 
 
+def always_quiet(raw: bytes | None) -> bool:
+    """TfL's isAlwaysQuiet flag, sent with an empty answer for some stations."""
+    try:
+        return bool(raw) and json.loads(raw).get("isAlwaysQuiet") is True
+    except (ValueError, AttributeError):
+        return False
+
+
 def fetch_station(station: dict) -> dict:
     days, am, pm = {}, {}, {}
+    quiet = False
     for day in DAYS:
         url = CROWDING_URL.format(naptan=quote(station["naptan"], safe=""), day=day)
-        parsed = parse_day(fetch(url))
+        raw = fetch(url)
+        parsed = parse_day(raw)
         if parsed is None:
+            quiet = quiet or always_quiet(raw)
             continue
         values, am_band, pm_band = parsed
         days[day] = values
         am[day] = am_band
         pm[day] = pm_band
-    return {"days": days, "am": am, "pm": pm}
+    return {"days": days, "am": am, "pm": pm, "always_quiet": quiet}
+
+
+def recheck_no_data(out: Path, data: dict) -> None:
+    """Ask TfL once more (Monday) about each station without figures, and
+    record the ones it marks isAlwaysQuiet."""
+    flagged = set(data.get("always_quiet", []))
+    for naptan, name in sorted(data["no_data"].items(), key=lambda item: item[1]):
+        url = CROWDING_URL.format(naptan=quote(naptan, safe=""), day="Mon")
+        raw = fetch(url)
+        if parse_day(raw) is None and always_quiet(raw):
+            flagged.add(naptan)
+        print(f"  {name}: {'always quiet' if naptan in flagged else 'no figures'}", flush=True)
+    data["always_quiet"] = sorted(flagged)
+    save(out, data)
 
 
 def save(out: Path, data: dict) -> None:
@@ -188,19 +214,27 @@ def main() -> None:
     parser.add_argument("--stations-file", help="use a saved copy of the station list")
     parser.add_argument("--fresh", action="store_true", help="ignore an existing file")
     parser.add_argument("--limit", type=int, default=0, help="only the first N stations")
+    parser.add_argument("--recheck-no-data", action="store_true",
+                        help="only re-ask TfL about the stations without figures")
     args = parser.parse_args()
     out = Path(args.out)
 
     data = {"source": "TfL open data", "downloaded": date.today().isoformat(),
-            "stations": {}, "no_data": {}}
+            "stations": {}, "no_data": {}, "always_quiet": []}
     if out.exists() and not args.fresh:
         try:
             previous = json.loads(out.read_text(encoding="utf-8"))
             data["stations"] = previous.get("stations", {})
             data["no_data"] = previous.get("no_data", {})
+            data["always_quiet"] = previous.get("always_quiet", [])
+            data["downloaded"] = previous.get("downloaded", data["downloaded"])
             print(f"Resuming: {len(data['stations'])} stations already in {out.name}", flush=True)
         except ValueError:
             pass
+
+    if args.recheck_no_data:
+        recheck_no_data(out, data)
+        return
 
     stations = load_stations(args.stations_file)
     if args.limit:
@@ -222,6 +256,7 @@ def main() -> None:
                 print(f"[{done}/{len(todo)}] FAILED {station['name']}: {exc}", flush=True)
                 continue
             with _save_lock:
+                quiet = result.pop("always_quiet")
                 if result["days"]:
                     data["stations"][station["naptan"]] = {
                         "name": station["name"], "lat": station["lat"], "lon": station["lon"],
@@ -229,6 +264,10 @@ def main() -> None:
                     }
                 else:
                     data["no_data"][station["naptan"]] = station["name"]
+                    if quiet:
+                        data.setdefault("always_quiet", [])
+                        if station["naptan"] not in data["always_quiet"]:
+                            data["always_quiet"].append(station["naptan"])
                 data["downloaded"] = date.today().isoformat()
                 save(out, data)
             status = f"{len(result['days'])} days" if result["days"] else "no data"

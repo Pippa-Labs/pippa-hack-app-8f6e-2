@@ -107,7 +107,7 @@ outcomes:
         type: string
         description: >-
           Start (HH:MM) of the quietest fifteen minutes in the window asked
-          about, or near the time asked about, or 06:00-23:00 when neither was
+          about, or near the time asked about, or 07:00-22:00 when neither was
           given.
       - name: busiest_time
         type: string
@@ -197,7 +197,7 @@ outcomes:
         type: string
         description: >-
           Start (HH:MM) of the quietest fifteen minutes in the window asked
-          about, or near the time asked about, or 06:00-23:00 when neither was
+          about, or near the time asked about, or 07:00-22:00 when neither was
           given.
       - name: busiest_time
         type: string
