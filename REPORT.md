@@ -184,7 +184,43 @@ Refused (UnknownStation):
 
 > I couldn't find a London tube station called "Narnia".
 
-<!-- ROUTING -->
+## Routing check
+
+`python scripts/routing_check.py` (run locally against the SDK stand-in;
+the build runs it again with the real SDK after a passed check):
+
+```
+Will Pippa choose your app?
+
+  OK  summary leads with something specific (109 chars seen)
+       chooser sees: 'How busy a London tube station is at a time and day versus its usual peak, and when it is quietest or busiest'
+  OK  crowding.at: 8 example phrases
+  OK  crowding.quietest: 8 example phrases
+  OK  crowding.at and crowding.quietest are distinct
+
+Nothing here will stop your app being chosen.
+```
+
+Read by hand as well (CLAUDE.md step 3, which the script cannot check):
+each promise in the summary has its own phrases. *How busy at a time and
+day* → `how busy is the tube station at`, `is the station busy at 8am`;
+*when it is quietest* → `when is the station quietest`, `best time to go
+through the tube station`; *busiest / rush hour* → `when is rush hour at the
+station`, `what time is the station busiest`. The first four phrases the
+chooser sees (round-robin) cover both outcomes. No reserved word (today,
+tomorrow, calendar, schedule, search…) appears in any phrase, and the word
+"by" is not in `app.summary`.
+
+**Prompts to try once it is installed** (without the @ first, then with it):
+
+- Should reach it: "how busy is Oxford Circus at 5:30pm on a Friday",
+  "when is Bank quietest on a weekday morning", "is King's Cross busy at 8am",
+  "best time to go through Waterloo on Saturday", "when's the rush hour at
+  Canary Wharf"
+- Worded differently: "is Victoria rammed after work", "will Stratford be
+  packed at 6", "least busy time for Liverpool Street on Sunday"
+- Should NOT reach it: "why is the Central line so hot", "is the Elizabeth
+  line part of the tube", "change my commute to 9am"
 
 <!-- TESTS -->
 
@@ -256,6 +292,16 @@ Refused (UnknownStation):
 14. `scripts/build_data.py` is a new file in `scripts/` (not deployed, as it
     should not be). No existing file in `scripts/`, `.githooks`, `.claude`,
     `.github`, `conftest.py` or `pytest.ini` was changed.
+15. **GitHub invitation.** The first push was refused (no write access yet):
+    your GitHub account had a pending write invitation for this repository
+    from Pippa Labs. The README says to accept it, and pushing was part of the
+    brief, so I accepted that one invitation (only this repository's) and
+    pushed.
+16. **First push carried partial data.** I pushed once the tests were green
+    with Zone 1 and most of Zone 2 downloaded (all five demo stations
+    included), to prove the build early, then pushed again with the full
+    file. Both are the same version, 0.1.0, which is still a draft, so the
+    second push replaced the first.
 
 ## Risks
 

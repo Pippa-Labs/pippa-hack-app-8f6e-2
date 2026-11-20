@@ -25,8 +25,13 @@ What it does:
 Zone 1 stations are fetched first, 8 at a time, and the file is saved after
 every station, so a run that is stopped part way still leaves a useful file,
 and running it again carries on where it stopped (pass --fresh to start over).
-A 429 from TfL is backed off and retried. It never calls the live crowding
-endpoint. Standard library only.
+A 429 from TfL is backed off and retried. At the end it asks once more for
+every missing day and every station without figures (also on its own:
+--recheck), and records the stations TfL flags isAlwaysQuiet. It never calls
+the live crowding endpoint. Standard library only.
+
+TfL allows anonymous use about 50 requests a minute, so a full run (about
+1,900 requests) takes roughly 40 minutes.
 """
 
 from __future__ import annotations
@@ -188,18 +193,65 @@ def fetch_station(station: dict) -> dict:
     return {"days": days, "am": am, "pm": pm, "always_quiet": quiet}
 
 
-def recheck_no_data(out: Path, data: dict) -> None:
-    """Ask TfL once more (Monday) about each station without figures, and
-    record the ones it marks isAlwaysQuiet."""
+def why_rejected(raw: bytes | None) -> str:
+    """A short reason parse_day() refused an answer, for the log."""
+    if not raw:
+        return "404"
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        return "not JSON"
+    if not isinstance(body, dict):
+        return "unexpected shape"
+    bands = body.get("timeBands") or []
+    if body.get("isFound") is False:
+        return "isFound false" + (", isAlwaysQuiet" if body.get("isAlwaysQuiet") else "")
+    if len(bands) != 96:
+        return f"{len(bands)} bands"
+    if any(band.get("percentageOfBaseLine") is None for band in bands):
+        return "missing values"
+    return "all zero"
+
+
+def recheck(out: Path, data: dict, stations: list[dict]) -> None:
+    """Ask TfL again for every missing day: the days a station lacks, and all
+    seven for each station without figures. Keeps whatever now parses, and
+    records the stations TfL marks isAlwaysQuiet."""
+    meta = {s["naptan"]: s for s in stations}
     flagged = set(data.get("always_quiet", []))
-    for naptan, name in sorted(data["no_data"].items(), key=lambda item: item[1]):
-        url = CROWDING_URL.format(naptan=quote(naptan, safe=""), day="Mon")
-        raw = fetch(url)
-        if parse_day(raw) is None and always_quiet(raw):
-            flagged.add(naptan)
-        print(f"  {name}: {'always quiet' if naptan in flagged else 'no figures'}", flush=True)
-    data["always_quiet"] = sorted(flagged)
-    save(out, data)
+    todo = [(n, list(DAYS)) for n in sorted(data["no_data"], key=lambda n: data["no_data"][n])]
+    todo += [(n, [d for d in DAYS if d not in s["days"]])
+             for n, s in sorted(data["stations"].items(), key=lambda item: item[1]["name"])
+             if len(s["days"]) < len(DAYS)]
+    for naptan, days in todo:
+        reasons = {}
+        for day in days:
+            raw = fetch(CROWDING_URL.format(naptan=quote(naptan, safe=""), day=day))
+            parsed = parse_day(raw)
+            if parsed is None:
+                reasons[day] = why_rejected(raw)
+                if always_quiet(raw):
+                    flagged.add(naptan)
+                continue
+            values, am_band, pm_band = parsed
+            if naptan not in data["stations"]:
+                info = meta.get(naptan, {"name": data["no_data"].get(naptan, naptan),
+                                         "lat": 0, "lon": 0, "zone": "", "lines": []})
+                data["stations"][naptan] = {
+                    "name": info["name"], "lat": info["lat"], "lon": info["lon"],
+                    "zone": info["zone"], "lines": info["lines"], "days": {}, "am": {}, "pm": {}}
+            entry = data["stations"][naptan]
+            entry["days"][day] = values
+            entry["am"][day] = am_band
+            entry["pm"][day] = pm_band
+        if naptan in data["stations"]:
+            data["no_data"].pop(naptan, None)
+            flagged.discard(naptan)
+        name = data["stations"].get(naptan, {}).get("name") or data["no_data"].get(naptan, naptan)
+        got = [d for d in days if d not in reasons]
+        print(f"  {name}: got {got or 'nothing'}; still missing {reasons or 'nothing'}", flush=True)
+        data["always_quiet"] = sorted(flagged & set(data["no_data"]))
+        save(out, data)
 
 
 def save(out: Path, data: dict) -> None:
@@ -214,8 +266,8 @@ def main() -> None:
     parser.add_argument("--stations-file", help="use a saved copy of the station list")
     parser.add_argument("--fresh", action="store_true", help="ignore an existing file")
     parser.add_argument("--limit", type=int, default=0, help="only the first N stations")
-    parser.add_argument("--recheck-no-data", action="store_true",
-                        help="only re-ask TfL about the stations without figures")
+    parser.add_argument("--recheck", "--recheck-no-data", dest="recheck", action="store_true",
+                        help="only re-ask TfL for missing days and stations without figures")
     args = parser.parse_args()
     out = Path(args.out)
 
@@ -232,11 +284,10 @@ def main() -> None:
         except ValueError:
             pass
 
-    if args.recheck_no_data:
-        recheck_no_data(out, data)
-        return
-
     stations = load_stations(args.stations_file)
+    if args.recheck:
+        recheck(out, data, stations)
+        return
     if args.limit:
         stations = stations[: args.limit]
     todo = [s for s in stations if s["naptan"] not in data["stations"] and s["naptan"] not in data["no_data"]]
@@ -272,6 +323,10 @@ def main() -> None:
                 save(out, data)
             status = f"{len(result['days'])} days" if result["days"] else "no data"
             print(f"[{done}/{len(todo)}] {station['name']} (zone {station['zone']}): {status}", flush=True)
+
+    if data["no_data"] or any(len(s["days"]) < len(DAYS) for s in data["stations"].values()):
+        print("Asking again for missing days and stations without figures ...", flush=True)
+        recheck(out, data, stations)
 
     size = out.stat().st_size if out.exists() else 0
     print(f"Done: {len(data['stations'])} stations with figures, {len(data['no_data'])} without, "
