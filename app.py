@@ -71,7 +71,7 @@ class QuietTimeError(AgentAppError):
 
 
 class NoStation(QuietTimeError):
-    user_message = "Which tube station? Name one, for example Oxford Circus or King's Cross."
+    user_message = "Please name a tube station, for example Oxford Circus or King's Cross."
 
 
 class UnknownStation(QuietTimeError):
@@ -332,7 +332,46 @@ def parse_day(text: str, today: date) -> str | None:
             return DAYS[date(year, parsed.month, parsed.day).weekday()]
         except ValueError:
             return "?"
+    if parse_window(cleaned) is not None:
+        return None         # "this evening": no day named, only a part of one
     return "?"
+
+
+def specific_date(text: str, today: date) -> date | None:
+    """The calendar date `text` names (today, tomorrow, next friday, 2026-12-04,
+    4 December ...), or None when it names only a weekday, a group or nothing."""
+    cleaned = (text or "").strip().lower()
+    words = re.findall(r"[a-z]+", cleaned)
+    for word in words:
+        if word in _RELATIVE_DAYS:
+            return today + timedelta(days=_RELATIVE_DAYS[word])
+    if "next" in words:
+        for word in words:
+            key = _DAY_WORDS.get(word)
+            if key in DAYS:
+                ahead = (DAYS.index(key) - today.weekday()) % 7 or 7
+                return today + timedelta(days=ahead)
+    match = re.search(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", cleaned)
+    try:
+        if match:
+            return date(*map(int, match.groups()))
+        match = re.search(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", cleaned)
+        if match:
+            year = int(match.group(3)) if match.group(3) else today.year
+            return date(year + 2000 if year < 100 else year, int(match.group(2)), int(match.group(1)))
+    except ValueError:
+        return None
+    words_only = " ".join(re.sub(r"(\d+)(st|nd|rd|th)\b", r"\1", cleaned.replace(",", " ")).split())
+    for fmt in ("%d %B", "%d %b", "%B %d", "%b %d", "%d %B %Y", "%d %b %Y", "%B %d %Y"):
+        try:
+            parsed = datetime.strptime(words_only, fmt)
+        except ValueError:
+            continue
+        try:
+            return date(parsed.year if "%Y" in fmt else today.year, parsed.month, parsed.day)
+        except ValueError:
+            return None
+    return None
 
 
 _NOW_WORDS = {"now", "right now", "currently", "at the moment", "just now", "asap", "this minute"}
@@ -513,8 +552,8 @@ class App:
 
         if not self.data.get("stations"):
             raise DataUnavailable("crowding.json is missing or empty")
-        if not station_text:
-            raise NoStation("no station in the message")
+        if not normalise(station_text):
+            raise NoStation(f"no station in the message ({station_text!r})")
 
         naptan = self._station(station_text)
         name = self.index.names[naptan]
@@ -539,8 +578,10 @@ class App:
                 if found and found != "?":
                     day_key = found
                     break
-        # Whether "no time given" means "now": only for the current day.
-        about_now = day_key is None or day_key == today_key
+        # Whether "no time given" means "now": only for the current day. A
+        # date ("2026-12-04", "next friday") counts only if it is today's.
+        when = specific_date(day_text, now.date())
+        about_now = day_key is None or (when == now.date() if when else day_key == today_key)
         day_key = day_key or today_key
 
         window = parse_window(window_text)
@@ -564,8 +605,10 @@ class App:
 
         values, am_band, pm_band, label = self._profile(station, day_key)
         if values is None:
+            when_txt = {WEEKDAY: "on weekdays", WEEKEND: "at weekends"}.get(
+                day_key, f"on {DAY_NAMES.get(day_key, day_key)}")
             raise _fail(NoCrowdingData, f"no figures for {naptan} on {day_key}",
-                        f"TfL has no crowding figures for {name} on {DAY_NAMES.get(day_key, day_key)}.")
+                        f"TfL has no crowding figures for {name} {when_txt}.")
 
         reference = max(_peak_raw(station), 1)
         pct = [int(round(100 * v / reference)) for v in values]
@@ -636,10 +679,8 @@ class App:
             start, end = span
             return (start, end), f"between {hhmm(start)} and {hhmm(end) if end < DAY_END else '24:00'}"
         if isinstance(moment, int):
-            start = max(5 * 60, moment - NEAR_TIME)
+            start = max(min(5 * 60, moment - moment % BAND), moment - NEAR_TIME)
             end = min(DAY_END, moment + NEAR_TIME + BAND)
-            if end - start < 4 * BAND:
-                start = max(0, end - 4 * NEAR_TIME)
             return (start, end), f"between {hhmm(start)} and {hhmm(end) if end < DAY_END else '24:00'}"
         return DEFAULT_WINDOW, f"between {hhmm(DEFAULT_WINDOW[0])} and {hhmm(DEFAULT_WINDOW[1])}"
 
@@ -656,7 +697,8 @@ class App:
     def _narrative(outcome, data, pct, moment, window, window_label, span, quiet_i, busy_i,
                    am_band, pm_band, label) -> str:
         name = data["station"]
-        on_day = f"on {label}" if label in DAY_NAMES.values() else f"on {label.split(' (')[0].lower()}"
+        on_day = {GROUP_LABELS[WEEKDAY]: "on weekdays",
+                  GROUP_LABELS[WEEKEND]: "at weekends"}.get(label, f"on {label}")
         peaks = ", ".join(p for p in (f"am peak {am_band}" if am_band else "",
                                       f"pm peak {pm_band}" if pm_band else "") if p)
         quiet_txt = f"{data['quietest_time_in_window']} ({pct[quiet_i]}%)"
